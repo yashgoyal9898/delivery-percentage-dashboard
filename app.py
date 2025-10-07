@@ -1,6 +1,5 @@
 from io import StringIO
 import pandas as pd
-import altair as alt
 import streamlit as st
 
 # ------------------------------------------------------------------#
@@ -20,7 +19,6 @@ st.sidebar.markdown("[4. Monthly Delivery % Table](#monthly-delivery-table)")
 st.sidebar.markdown("[5. Quarterly Delivery % Table](#quarterly-delivery-table)")
 st.sidebar.markdown("[6. Half-Yearly Delivery % Table](#half-yearly-delivery-table)")
 st.sidebar.markdown("[7. Yearly Delivery % Table](#yearly-delivery-table)")
-
 
 # ------------------------------------------------------------------#
 # 2. File upload (support multiple CSVs)
@@ -113,27 +111,6 @@ df = (
 )
 
 # ------------------------------------------------------------------#
-# New: Date range selector for filtered average delivery %
-# ------------------------------------------------------------------#
-min_date = df["date"].min()
-max_date = df["date"].max()
-
-date_range = st.sidebar.date_input(
-    "📅 Select Date Range for Avg Delivery %",
-    value=(min_date, max_date),
-    min_value=min_date,
-    max_value=max_date,
-)
-
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    start_date, end_date = date_range
-else:
-    start_date, end_date = min_date, max_date
-
-df_filtered = df[(df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))]
-avg_delivery_filtered = df_filtered["delivery_pct"].mean() if not df_filtered.empty else float('nan')
-
-# ------------------------------------------------------------------#
 # 5. Sidebar filters
 # ------------------------------------------------------------------#
 spike_thr = st.sidebar.slider("🚨 Spike threshold (%)", 0.0, 100.0, 75.0, step=0.5)
@@ -146,13 +123,14 @@ st.markdown('<a name="summary-metrics"></a>', unsafe_allow_html=True)
 st.subheader("📌 Summary Metrics")
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric("Average Delivery % (Overall)", f"{df['delivery_pct'].mean():.2f}")
-col2.metric(
-    f"Average Delivery % ({start_date} to {end_date})",
-    f"{avg_delivery_filtered:.2f}" if not pd.isna(avg_delivery_filtered) else "N/A"
-)
-col3.metric("Max Delivery %", f"{df['delivery_pct'].max():.2f}")
-col4.metric("Total Days", int(df["date"].nunique()))
+avg_delivery_overall = df['delivery_pct'].mean()
+max_delivery = df['delivery_pct'].max()
+total_days = df['date'].nunique()
+
+col1.metric("Average Delivery % (Overall)", f"{avg_delivery_overall:.2f}")
+col2.metric("Max Delivery %", f"{max_delivery:.2f}")
+col3.metric("Total Days", total_days)
+col4.metric("Total Symbols", df['symbol'].nunique())
 
 # ------------------------------------------------------------------#
 # 7. Spike alerts
@@ -187,7 +165,7 @@ daily_columns = [
     "delivery_pct",
     "net_value_crore",
     "traded_qty_chg_%",
-    "deliverable_qty_chg_%",
+    "deliverable_qty_chg_%"
 ]
 
 def highlight_net_value(val):
@@ -195,202 +173,37 @@ def highlight_net_value(val):
         return "background-color: #ffe6e6; font-weight: bold"
     return ""
 
-styled_df = daily_disp[daily_columns].style.applymap(
-    highlight_net_value, subset=["net_value_crore"]
-)
-
+styled_df = daily_disp[daily_columns].style.map(highlight_net_value, subset=["net_value_crore"])
 st.dataframe(styled_df, use_container_width=True)
 
 # ------------------------------------------------------------------#
-# 9. Weekly Aggregation
+# 9. Aggregation function
 # ------------------------------------------------------------------#
-st.markdown('<a name="weekly-delivery-table"></a>', unsafe_allow_html=True)
-st.subheader("📅 Weekly Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
+def aggregate_and_display(df, period_col, display_name):
+    grouped = df.groupby([period_col, "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]].sum()
+    grouped["delivery_pct"] = 100 * grouped["deliverable_qty"] / grouped["traded_qty"]
 
+    disp = grouped.copy()
+    disp["traded_qty_million"] = (disp["traded_qty"] / 1e6).round(2)
+    disp["deliverable_qty_million"] = (disp["deliverable_qty"] / 1e6).round(2)
+    disp["net_value_crore"] = (disp["net_value"] / 1e7).round(2)
+
+    columns = [period_col, "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct", "net_value_crore"]
+    st.markdown(f'<a name="{display_name}-delivery-table"></a>', unsafe_allow_html=True)
+    st.subheader(f"📊 {display_name} Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
+    st.dataframe(disp[columns].style.map(highlight_net_value, subset=["net_value_crore"]), use_container_width=True)
+
+# ------------------------------------------------------------------#
+# 10. Weekly, Monthly, Quarterly, Half-Yearly, Yearly Aggregations
+# ------------------------------------------------------------------#
 df["week"] = df["date"].dt.to_period("W").apply(lambda r: r.start_time)
-weekly = (
-    df.groupby(["week", "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]]
-    .sum()
-)
-weekly["delivery_pct"] = 100 * weekly["deliverable_qty"] / weekly["traded_qty"]
-weekly = weekly.sort_values(["symbol", "week"])
-weekly["traded_qty_chg_%"] = weekly.groupby("symbol")["traded_qty"].pct_change() * 100
-weekly["deliverable_qty_chg_%"] = weekly.groupby("symbol")["deliverable_qty"].pct_change() * 100
-
-weekly_disp = weekly.copy()
-weekly_disp["traded_qty_million"] = (weekly_disp["traded_qty"] / 1e6).round(2)
-weekly_disp["deliverable_qty_million"] = (weekly_disp["deliverable_qty"] / 1e6).round(2)
-weekly_disp["net_value_crore"] = (weekly_disp["net_value"] / 1e7).round(2)
-weekly_disp["traded_qty_chg_%"] = weekly_disp["traded_qty_chg_%"].round(2)
-weekly_disp["deliverable_qty_chg_%"] = weekly_disp["deliverable_qty_chg_%"].round(2)
-weekly_disp = weekly_disp[
-    ["week", "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct",
-     "net_value_crore", "traded_qty_chg_%", "deliverable_qty_chg_%"]
-]
-styled_weekly = weekly_disp.style.applymap(highlight_net_value, subset=["net_value_crore"])
-st.dataframe(styled_weekly, use_container_width=True)
-
-wk_chart = (
-    alt.Chart(weekly)
-    .mark_line(point=True)
-    .encode(x="week:T", y="delivery_pct:Q", color="symbol:N",
-            tooltip=["week:T", "symbol:N", "delivery_pct:Q"])
-    .properties(width=900, height=400, title="Weekly Delivery %")
-)
-st.altair_chart(wk_chart, use_container_width=True)
-
-
-# ------------------------------------------------------------------#
-# 10. Monthly Aggregation (Millions)
-# ------------------------------------------------------------------#
-
-st.markdown('<a name="monthly-delivery-table"></a>', unsafe_allow_html=True)
-st.subheader("📅 Monthly Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
-
-
 df["month"] = df["date"].dt.to_period("M").apply(lambda r: r.start_time)
-monthly = (
-    df.groupby(["month", "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]]
-    .sum()
-)
-monthly["delivery_pct"] = 100 * monthly["deliverable_qty"] / monthly["traded_qty"]
-monthly = monthly.sort_values(["symbol", "month"])
-monthly["traded_qty_chg_%"] = monthly.groupby("symbol")["traded_qty"].pct_change() * 100
-monthly["deliverable_qty_chg_%"] = monthly.groupby("symbol")["deliverable_qty"].pct_change() * 100
-
-monthly_disp = monthly.copy()
-monthly_disp["traded_qty_million"] = (monthly_disp["traded_qty"] / 1e6).round(2)
-monthly_disp["deliverable_qty_million"] = (monthly_disp["deliverable_qty"] / 1e6).round(2)
-monthly_disp["net_value_crore"] = (monthly_disp["net_value"] / 1e7).round(2)
-monthly_disp["traded_qty_chg_%"] = monthly_disp["traded_qty_chg_%"].round(2)
-monthly_disp["deliverable_qty_chg_%"] = monthly_disp["deliverable_qty_chg_%"].round(2)
-monthly_disp = monthly_disp[
-    ["month", "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct",
-     "net_value_crore", "traded_qty_chg_%", "deliverable_qty_chg_%"]
-]
-styled_monthly = monthly_disp.style.applymap(highlight_net_value, subset=["net_value_crore"])
-st.dataframe(styled_monthly, use_container_width=True)
-
-mo_chart = (
-    alt.Chart(monthly)
-    .mark_line(point=True)
-    .encode(x="month:T", y="delivery_pct:Q", color="symbol:N",
-            tooltip=["month:T", "symbol:N", "delivery_pct:Q"])
-    .properties(width=900, height=400, title="Monthly Delivery %")
-)
-st.altair_chart(mo_chart, use_container_width=True)
-
-# ------------------------------------------------------------------#
-# 11. Quarterly Aggregation (Millions)
-# ------------------------------------------------------------------#
-st.markdown('<a name="quarterly-delivery-table"></a>', unsafe_allow_html=True)
-st.subheader("📊 Quarterly Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
-
 df["quarter"] = df["date"].dt.to_period("Q").apply(lambda r: r.start_time)
-quarterly = (
-    df.groupby(["quarter", "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]]
-    .sum()
-)
-quarterly["delivery_pct"] = 100 * quarterly["deliverable_qty"] / quarterly["traded_qty"]
-
-quarterly_disp = quarterly.copy()
-quarterly_disp["traded_qty_million"] = (quarterly_disp["traded_qty"] / 1e6).round(2)
-quarterly_disp["deliverable_qty_million"] = (quarterly_disp["deliverable_qty"] / 1e6).round(2)
-quarterly_disp["net_value_crore"] = (quarterly_disp["net_value"] / 1e7).round(2)
-quarterly_disp = quarterly_disp[
-    ["quarter", "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct", "net_value_crore"]
-]
-styled_quarterly = quarterly_disp.style.applymap(highlight_net_value, subset=["net_value_crore"])
-st.dataframe(styled_quarterly, use_container_width=True)
-
-qt_chart = (
-    alt.Chart(quarterly)
-    .mark_line(point=True)
-    .encode(x="quarter:T", y="delivery_pct:Q", color="symbol:N",
-            tooltip=["quarter:T", "symbol:N", "delivery_pct:Q"])
-    .properties(width=900, height=400, title="Quarterly Delivery %")
-)
-st.altair_chart(qt_chart, use_container_width=True)
-
-# ------------------------------------------------------------------#
-# 12. Half-Yearly Aggregation (Millions)
-# ------------------------------------------------------------------#
-st.markdown('<a name="half-yearly-delivery-table"></a>', unsafe_allow_html=True)
-st.subheader("📈 Half-Yearly Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
-
-def get_half_year(d):
-    year = d.year
-    return pd.Timestamp(f"{year}-01-01") if d.month <= 6 else pd.Timestamp(f"{year}-07-01")
-
-df["half_year"] = df["date"].apply(get_half_year)
-half_yearly = (
-    df.groupby(["half_year", "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]]
-    .sum()
-)
-half_yearly["delivery_pct"] = 100 * half_yearly["deliverable_qty"] / half_yearly["traded_qty"]
-
-half_disp = half_yearly.copy()
-half_disp["traded_qty_million"] = (half_disp["traded_qty"] / 1e6).round(2)
-half_disp["deliverable_qty_million"] = (half_disp["deliverable_qty"] / 1e6).round(2)
-half_disp["net_value_crore"] = (half_disp["net_value"] / 1e7).round(2)
-half_disp = half_disp[
-    ["half_year", "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct", "net_value_crore"]
-]
-styled_half = half_disp.style.applymap(highlight_net_value, subset=["net_value_crore"])
-st.dataframe(styled_half, use_container_width=True)
-
-half_chart = (
-    alt.Chart(half_yearly)
-    .mark_line(point=True)
-    .encode(
-        x=alt.X("half_year:T", title="Half-Year"),
-        y=alt.Y("delivery_pct:Q", title="Delivery %"),
-        color="symbol:N",
-        tooltip=["half_year:T", "symbol:N", "delivery_pct:Q"]
-    )
-    .properties(width=900, height=400, title="Half-Yearly Delivery %")
-)
-st.altair_chart(half_chart, use_container_width=True)
-
-# ------------------------------------------------------------------#
-# 13. Yearly Aggregation (Millions)
-# ------------------------------------------------------------------#
-st.markdown('<a name="yearly-delivery-table"></a>', unsafe_allow_html=True)
-st.subheader("📅 Yearly Delivery % (Quantities in Millions, Net Value in ₹ Crores)")
-
+df["half_year"] = df["date"].apply(lambda d: pd.Timestamp(f"{d.year}-01-01") if d.month <= 6 else pd.Timestamp(f"{d.year}-07-01"))
 df["year"] = df["date"].dt.to_period("Y").apply(lambda r: r.start_time)
-yearly = (
-    df.groupby(["year", "symbol"], as_index=False)[["traded_qty", "deliverable_qty", "net_value"]]
-    .sum()
-)
-yearly["delivery_pct"] = 100 * yearly["deliverable_qty"] / yearly["traded_qty"]
 
-year_disp = yearly.copy()
-year_disp["traded_qty_million"] = (year_disp["traded_qty"] / 1e6).round(2)
-year_disp["deliverable_qty_million"] = (year_disp["deliverable_qty"] / 1e6).round(2)
-year_disp["net_value_crore"] = (year_disp["net_value"] / 1e7).round(2)
-year_disp = year_disp[
-    ["year", "symbol", "traded_qty_million", "deliverable_qty_million", "delivery_pct", "net_value_crore"]
-]
-styled_year = year_disp.style.applymap(highlight_net_value, subset=["net_value_crore"])
-st.dataframe(styled_year, use_container_width=True)
-min_date = df["date"].min()
-max_date = df["date"].max()
-
-date_range = st.sidebar.date_input(
-    "📅 Select Date Range for Avg Delivery %",
-    value=(min_date, max_date),
-    min_value=min_date,
-    max_value=max_date,
-    key="avg_delivery_date_range"   # Unique key to avoid duplicate element ID error
-)
-
-
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    start_date, end_date = date_range
-else:
-    start_date, end_date = min_date, max_date
-
-df_filtered = df[(df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))]
-avg_delivery_filtered = df_filtered["delivery_pct"].mean() if not df_filtered.empty else float('nan')
-
+aggregate_and_display(df, "week", "Weekly")
+aggregate_and_display(df, "month", "Monthly")
+aggregate_and_display(df, "quarter", "Quarterly")
+aggregate_and_display(df, "half_year", "Half-Yearly")
+aggregate_and_display(df, "year", "Yearly")
