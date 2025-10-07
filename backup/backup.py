@@ -1,13 +1,3 @@
-"""
-delivery_dashboard.py
-~~~~~~~~~~~~~~~~~~~~~
-Interactive dashboard for Daily / Weekly / Monthly / Quarterly / Half-Yearly
-delivery percentage with optional Close‑price overlay.
-
-Author  : Your Name
-Last Mod: 2025‑07‑21 (updated with date range avg delivery %)
-"""
-
 from io import StringIO
 import pandas as pd
 import altair as alt
